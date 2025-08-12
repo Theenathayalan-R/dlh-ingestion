@@ -1,0 +1,11 @@
+[run]
+branch = True
+source =
+    dlh_run_db_ingestion
+
+[report]
+omit =
+    tests/*
+    */__init__.py
+    python_dlh_ingestion_run_db_job.py
+show_missing = True
