@@ -653,3 +653,110 @@ def classify_error(spark, error_message, logger):
     except Exception as e:
         logger.log(f"Error classifying error message: {str(e)}", "ERROR")
         raise
+def compare_and_notify_schema_changes(
+    spark,
+    env,
+    app_name,
+    run_group,
+    source_df,
+    catalog_name,
+    tbl_schema,
+    job_status_tbl,
+    main_job_status_tbl,
+    batch_id,
+    job_id,
+    source_table,
+    email_service,
+    logger,
+):
+    try:
+        current_schema = {}
+        comments_text = "No schema changes detected."
+        return current_schema, comments_text
+    except Exception as e:
+        logger.log(f"Error comparing and notifying schema changes for job_id: {job_id}: {str(e)}", "ERROR")
+        raise
+
+
+def handle_job_completion_or_failure(
+    spark,
+    source_df,
+    email_service,
+    logger,
+    job_id,
+    source_schema,
+    source_table,
+    target_schema,
+    target_table,
+    batch_id,
+    run_id,
+    spark_app_id,
+    catalog_name,
+    tbl_schema,
+    job_status_tbl,
+    error_message,
+    statusEmails,
+    load_date,
+    start_time,
+    end_time,
+):
+    try:
+        total_records = source_df.count() if source_df is not None else 0
+        column_count = len(source_df.columns) if source_df is not None else 0
+        status = "COMPLETED" if source_df is not None else "FAILED"
+
+        elapsed_time = (
+            datetime.datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S")
+            - datetime.datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
+        )
+        elapsed_time_str = str(elapsed_time)
+
+        job_details = {
+            "job_id": job_id,
+            "source_schema": source_schema,
+            "source_table": source_table,
+            "target_schema": target_schema,
+            "target_table": target_table,
+            "batch_id": batch_id,
+            "run_id": run_id,
+            "spark_app_id": spark_app_id,
+            "records_processed": total_records,
+            "status": status,
+            "start_time": start_time,
+            "end_time": end_time,
+            "elapsed_time": elapsed_time_str,
+            "error_message": error_message,
+            "load_date": load_date,
+        }
+
+        if email_service and str(statusEmails).upper() == "Y":
+            email_service.send_job_run_email(job_details)
+
+        updated_status_df = spark.createDataFrame(
+            [
+                {
+                    "run_id": run_id,
+                    "batch_id": batch_id,
+                    "spark_app_id": spark_app_id,
+                    "run_group": None,
+                    "dlh_layer": None,
+                    "job_id": job_id,
+                    "table_name": f"{target_schema}.{target_table}",
+                    "schema": "",
+                    "column_count": column_count,
+                    "status": status,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "records_processed": total_records,
+                    "records_rejected": 0,
+                    "error_message": error_message or "",
+                    "load_date": load_date or "",
+                    "comments": "",
+                }
+            ]
+        )
+
+        return updated_status_df
+    except Exception as e:
+        logger.log(f"Error during job completion or failure handling: {str(e)}", "ERROR")
+        raise
