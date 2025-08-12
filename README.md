@@ -100,3 +100,39 @@ The code assigns a distinct pool per job using the SparkContext local property "
 ## License
 
 Proprietary or as per your project’s policy. 
+## FAIR scheduler configuration (weighted per-job pools)
+
+This repo includes a fairscheduler.xml that defines explicit pools for per-job scheduling:
+- pool-1..pool-20: weight=4, minShare=4 (critical)
+- pool-21..pool-60: weight=2, minShare=2 (high)
+- pool-61..pool-160: weight=1, minShare=0 (normal)
+- main/default: weight=1, minShare=0
+
+How it works with the code:
+- Code sets the pool per job before Spark actions:
+  - spark.sparkContext.setLocalProperty("spark.scheduler.pool", f"pool-&lt;job_id&gt;")
+- Code enables FAIR mode:
+  - spark.conf.set("spark.scheduler.mode", "FAIR")
+- Spark reads fairscheduler.xml (the code does not):
+  - --conf spark.scheduler.mode=FAIR
+  - --conf spark.scheduler.allocation.file=/opt/spark/conf/fairscheduler.xml
+
+Kubernetes usage:
+- ConfigMap:
+  - kubectl create configmap spark-fair-scheduler --from-file=fairscheduler.xml
+  - Mount into driver/executors at /opt/spark/conf/fairscheduler.xml
+  - Submit with:
+    --conf spark.scheduler.mode=FAIR
+    --conf spark.scheduler.allocation.file=/opt/spark/conf/fairscheduler.xml
+- Image bake:
+  - Copy fairscheduler.xml into /opt/spark/conf/ in the Spark image
+  - Use the same submit flags as above
+- --files alternative:
+  - --files fairscheduler.xml
+  - --conf spark.scheduler.mode=FAIR
+  - --conf spark.scheduler.allocation.file=./fairscheduler.xml
+
+Notes:
+- FAIR has weight and minShare; there is no maxShare (effective maximum share is influenced by weight).
+- Pools not explicitly defined inherit defaults from "default".
+- Spark UI will show pool names with the allocation file present; you should observe concurrent jobs across different pools.

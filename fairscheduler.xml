@@ -1,0 +1,184 @@
+<?xml version="1.0"?>
+<allocations>
+  <pool name="default">
+    <schedulingMode>FAIR</schedulingMode>
+    <weight>1</weight>
+    <minShare>0</minShare>
+  </pool>
+
+  <pool name="main">
+    <schedulingMode>FAIR</schedulingMode>
+    <weight>1</weight>
+    <minShare>0</minShare>
+  </pool>
+
+  <!-- Preemption/timeout tuning (optional, affects how quickly Spark rebalances shares) -->
+  <fairSharePreemptionTimeout>60</fairSharePreemptionTimeout>
+  <minShareTimeout>60</minShareTimeout>
+
+  <!-- Critical pools: pool-1 .. pool-20 -->
+  <pool name="pool-1"><schedulingMode>FAIR</schedulingMode><weight>4</weight><minShare>4</minShare></pool>
+  <pool name="pool-2"><schedulingMode>FAIR</schedulingMode><weight>4</weight><minShare>4</minShare></pool>
+  <pool name="pool-3"><schedulingMode>FAIR</schedulingMode><weight>4</weight><minShare>4</minShare></pool>
+  <pool name="pool-4"><schedulingMode>FAIR</schedulingMode><weight>4</weight><minShare>4</minShare></pool>
+  <pool name="pool-5"><schedulingMode>FAIR</schedulingMode><weight>4</weight><minShare>4</minShare></pool>
+  <pool name="pool-6"><schedulingMode>FAIR</schedulingMode><weight>4</weight><minShare>4</minShare></pool>
+  <pool name="pool-7"><schedulingMode>FAIR</schedulingMode><weight>4</weight><minShare>4</minShare></pool>
+  <pool name="pool-8"><schedulingMode>FAIR</schedulingMode><weight>4</weight><minShare>4</minShare></pool>
+  <pool name="pool-9"><schedulingMode>FAIR</schedulingMode><weight>4</weight><minShare>4</minShare></pool>
+  <pool name="pool-10"><schedulingMode>FAIR</schedulingMode><weight>4</weight><minShare>4</minShare></pool>
+  <pool name="pool-11"><schedulingMode>FAIR</schedulingMode><weight>4</weight><minShare>4</minShare></pool>
+  <pool name="pool-12"><schedulingMode>FAIR</schedulingMode><weight>4</weight><minShare>4</minShare></pool>
+  <pool name="pool-13"><schedulingMode>FAIR</schedulingMode><weight>4</weight><minShare>4</minShare></pool>
+  <pool name="pool-14"><schedulingMode>FAIR</schedulingMode><weight>4</weight><minShare>4</minShare></pool>
+  <pool name="pool-15"><schedulingMode>FAIR</schedulingMode><weight>4</weight><minShare>4</minShare></pool>
+  <pool name="pool-16"><schedulingMode>FAIR</schedulingMode><weight>4</weight><minShare>4</minShare></pool>
+  <pool name="pool-17"><schedulingMode>FAIR</schedulingMode><weight>4</weight><minShare>4</minShare></pool>
+  <pool name="pool-18"><schedulingMode>FAIR</schedulingMode><weight>4</weight><minShare>4</minShare></pool>
+  <pool name="pool-19"><schedulingMode>FAIR</schedulingMode><weight>4</weight><minShare>4</minShare></pool>
+  <pool name="pool-20"><schedulingMode>FAIR</schedulingMode><weight>4</weight><minShare>4</minShare></pool>
+
+  <!-- High pools: pool-21 .. pool-60 -->
+  <pool name="pool-21"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-22"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-23"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-24"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-25"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-26"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-27"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-28"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-29"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-30"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-31"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-32"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-33"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-34"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-35"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-36"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-37"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-38"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-39"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-40"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-41"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-42"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-43"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-44"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-45"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-46"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-47"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-48"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-49"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-50"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-51"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-52"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-53"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-54"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-55"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-56"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-57"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-58"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-59"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+  <pool name="pool-60"><schedulingMode>FAIR</schedulingMode><weight>2</weight><minShare>2</minShare></pool>
+
+  <!-- Normal pools: pool-61 .. pool-160 -->
+  <pool name="pool-61"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-62"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-63"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-64"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-65"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-66"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-67"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-68"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-69"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-70"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-71"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-72"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-73"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-74"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-75"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-76"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-77"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-78"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-79"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-80"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-81"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-82"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-83"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-84"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-85"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-86"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-87"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-88"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-89"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-90"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-91"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-92"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-93"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-94"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-95"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-96"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-97"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-98"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-99"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-100"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-101"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-102"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-103"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-104"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-105"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-106"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-107"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-108"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-109"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-110"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-111"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-112"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-113"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-114"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-115"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-116"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-117"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-118"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-119"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-120"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-121"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-122"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-123"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-124"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-125"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-126"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-127"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-128"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-129"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-130"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-131"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-132"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-133"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-134"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-135"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-136"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-137"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-138"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-139"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-140"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-141"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-142"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-143"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-144"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-145"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-146"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-147"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-148"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-149"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-150"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-151"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-152"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-153"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-154"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-155"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-156"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-157"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-158"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-159"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+  <pool name="pool-160"><schedulingMode>FAIR</schedulingMode><weight>1</weight><minShare>0</minShare></pool>
+</allocations>
