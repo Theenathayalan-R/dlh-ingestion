@@ -17,6 +17,9 @@ import pyspark.sql.functions as F
 from pyspark.sql.functions import lit, expr, col
 from pyspark.sql.types import StructType, StructField, StringType
 from pyspark.sql.window import Window
+from pyspark import SparkFiles
+from functools import reduce
+
 
 
 class CustomLogger:
@@ -1285,3 +1288,249 @@ WHERE TABLE_NAME = '{source_table.upper()}' AND OWNER = '{source_schema.upper()}
     except Exception as e:
         logger.log(f"Error in process_table for {row.get('job_id')}: {str(e)}", "ERROR")
         raise
+def write_with_retry(spark, df, catalog_name, tbl_schema, job_status_tbl, logger, retry_delay: int = 5, max_retries: int = 50):
+    try:
+        table_name = f"{catalog_name}.{tbl_schema}.{job_status_tbl}"
+        df = df.withColumn("start_time", col("start_time").cast("timestamp")).withColumn("end_time", col("end_time").cast("timestamp"))
+        attempt = 0
+        while attempt < max_retries:
+            try:
+                df.coalesce(10).write.format("iceberg").mode("append").saveAsTable(table_name)
+                print(f"Data successfully written to {table_name}")
+                return
+            except Exception as e:
+                attempt += 1
+                print(f"Attempt {attempt} failed: {str(e)}")
+                if attempt < max_retries:
+                    print(f"Retrying in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
+                else:
+                    print(f"All {max_retries} attempts failed. Raising exception.")
+                    raise
+    except Exception as e:
+        logger.log(f"Error writing DataFrame to table {job_status_tbl}: {str(e)}", "ERROR")
+        raise
+
+
+def rerun_failed_jobs(spark, run_group, catalog_name, tbl_schema, job_status_tbl, logger):
+    try:
+        failed_jobs_df = spark.sql(f"""
+SELECT job_id, MAX(batch_id) as batch_id, MAX(spark_app_id) as spark_app_id
+FROM {catalog_name}.{tbl_schema}.{job_status_tbl}
+WHERE run_group = '{run_group}' AND status = 'FAILED'
+GROUP BY job_id
+""")
+        logger.log(f"Fetched failed jobs for rerun: {failed_jobs_df.count()} jobs found.", "INFO")
+        return failed_jobs_df
+    except Exception as e:
+        logger.log(f"Error fetching failed jobs for rerun: {str(e)}", "ERROR")
+        raise
+
+
+def main():
+    try:
+        spark = SparkSession.builder.getOrCreate()
+        if len(sys.argv) < 4:
+            print("Usage: script.py <run_group> <app_pipeline> <env> [rerun]")
+            sys.exit(1)
+
+        run_group = sys.argv[1]
+        app_pipeline = sys.argv[2]
+        app_name = f"{app_pipeline}-{run_group}"
+        env = sys.argv[3]
+        print(f"run_group: {run_group}")
+        print(f"app_pipeline: {app_pipeline}")
+        print(f"env: {env}")
+        rerun = sys.argv[4] if len(sys.argv) > 4 else None
+        print(f"rerun: {rerun}")
+
+        files = os.listdir(SparkFiles.getRootDirectory())
+        if files:
+            print(f"File-1 added with --files: {files[0]}")
+            if len(files) > 1:
+                print(f"File-2 added with --files: {files[1]}")
+
+        alert_config = read_config_from_iceberg(spark, "", "", "", run_group, app_pipeline)
+
+        s3_bucket = alert_config.get("log_bucket", "s3://temp-bucket/")
+        s3_prefix = alert_config.get("log_reference", "/temp-prefix/")
+        app_name_cfg = alert_config.get("app_pipeline", app_name)
+        smtp_server = alert_config.get("smtp_server", "")
+        smtp_port = alert_config.get("smtp_port", 25)
+        statusEmails = alert_config.get("statusEmails", "Y")
+        retention_period = alert_config.get("retention_period", 7)
+        sender_email = alert_config.get("alert_email_from", "")
+        success_email = alert_config.get("success_email_to", "")
+        failure_email = alert_config.get("failure_email_to", "")
+
+        logger = CustomLogger(spark, s3_bucket, s3_prefix, app_name_cfg)
+        logger.log(f"Logger is Intialized for app: {app_name_cfg}")
+        logger.log("Log file initiated", "INFO")
+
+        catalog_name = alert_config.get("catalog_name", "")
+        schema_config = alert_config.get("schema_config", {})
+        tbl_schema = schema_config.get("tbl_schema", "")
+        ingest_tbl = alert_config.get("ingest_tbl", "")
+        alert_tbl = alert_config.get("alert_tbl", "")
+
+        table_name = f"{catalog_name}.{tbl_schema}.{ingest_tbl}"
+        print(f"table name: {table_name}")
+
+        if alert_config.get("alert_type", "EMAIL").upper() == "EMAIL":
+            email_service = EmailService(
+                batch_id=None,
+                env=env,
+                app_name=app_name_cfg,
+                run_group=run_group,
+                smtp_server=smtp_server,
+                smtp_port=smtp_port,
+                sender_email=sender_email,
+                success_email=success_email,
+                failure_email=failure_email,
+                retention_period=retention_period,
+                logger=logger,
+            )
+        else:
+            email_service = None
+
+        if rerun and rerun.upper() == "RERUN":
+            failed_jobs_df = rerun_failed_jobs(spark, run_group, catalog_name, tbl_schema, job_status_tbl=alert_config.get("job_status_tbl", ""), logger=logger)
+            if failed_jobs_df.count() == 0:
+                print("No failed jobs found for rerun.")
+                return 0
+
+        spark_app_id = spark.sparkContext.applicationId
+        print(f"Spark Application id: {spark_app_id}")
+        batch_id = datetime.datetime.now().strftime("%Y%m%d%H")
+        formatted_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        df = spark.table(table_name).filter(
+            (col("app_pipeline") == app_pipeline)
+            & (col("run_group") == run_group)
+            & (col("is_enabled") == "Y")
+            & (col("is_active") == "Y")
+        ).persist()
+
+        source_db_config = alert_config.get("source_db_config", {})
+        dbpass = alert_config.get("dbpass", "")
+
+        rows = df.collect()
+        if rows is None:
+            return 1
+
+        lock = threading.Lock()
+        run_id = get_run_id(spark, catalog_name, tbl_schema, alert_config.get("job_status_tbl", ""), batch_id, None, logger)
+        logger.log(f"Job initiated for batch id: {batch_id} run_id: {run_id}", "INFO")
+
+        max_workers = alert_config.get("max_workers", 5)
+        futures = []
+        job_trackers = []
+        initial_status_dfs = []
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for row in rows:
+                job_tracker = JobTracker(
+                    spark=spark,
+                    batch_id=batch_id,
+                    run_id=run_id,
+                    spark_app_id=spark_app_id,
+                    catalog_name=catalog_name,
+                    database=tbl_schema,
+                    job_status_tbl=alert_config.get("job_status_tbl", ""),
+                    job_id=row["job_id"],
+                    table_name=row["target_table"],
+                    run_group=run_group,
+                    logger=logger,
+                )
+                initial_df = job_tracker.insert_initial_status()
+                initial_status_dfs.append(initial_df)
+                job_trackers.append(job_tracker)
+                futures.append(
+                    executor.submit(
+                        process_table,
+                        row=row,
+                        spark=spark,
+                        env=env,
+                        batch_id=batch_id,
+                        spark_app_id=spark_app_id,
+                        catalog_name=catalog_name,
+                        tbl_schema=tbl_schema,
+                        job_status_tbl=alert_config.get("job_status_tbl", ""),
+                        cdc_tracker_tbl=alert_config.get("cdc_tracker_tbl", ""),
+                        s3_bucket=s3_bucket,
+                        source_db_config=source_db_config,
+                        dbpass=dbpass,
+                        email_service=email_service,
+                        logger=logger,
+                        lock=lock,
+                        formatted_date=formatted_date,
+                        statusEmails=statusEmails,
+                        job_tracker=job_tracker,
+                        run_id=run_id,
+                    )
+                )
+
+        updated_status_dfs = []
+        for future in futures:
+            updated_status_dfs.append(future.result())
+
+        if initial_status_dfs:
+            consolidated_initial = reduce(lambda d1, d2: d1.unionByName(d2, allowMissingColumns=True), initial_status_dfs)
+        else:
+            consolidated_initial = spark.createDataFrame([], spark.table(f"{catalog_name}.{tbl_schema}.{alert_config.get('job_status_tbl', '')}").schema)
+
+        if updated_status_dfs:
+            consolidated_updated = reduce(lambda d1, d2: d1.unionByName(d2, allowMissingColumns=True), updated_status_dfs)
+        else:
+            consolidated_updated = spark.createDataFrame([], consolidated_initial.schema)
+
+        final_status_df = consolidated_initial.alias("initial").join(
+            consolidated_updated.alias("updated"),
+            on="job_id",
+            how="outer",
+        ).select(
+            F.coalesce(col("updated.batch_id"), col("initial.batch_id")).alias("batch_id"),
+            F.coalesce(col("updated.run_id"), col("initial.run_id")).alias("run_id"),
+            F.coalesce(col("updated.spark_app_id"), col("initial.spark_app_id")).alias("spark_app_id"),
+            F.coalesce(col("updated.run_group"), col("initial.run_group")).alias("run_group"),
+            F.coalesce(col("updated.dlh_layer"), col("initial.dlh_layer")).alias("dlh_layer"),
+            F.coalesce(col("updated.job_id"), col("initial.job_id")).alias("job_id"),
+            F.coalesce(col("updated.table_name"), col("initial.table_name")).alias("table_name"),
+            F.coalesce(col("updated.status"), col("initial.status")).alias("status"),
+            F.coalesce(col("updated.start_time"), col("initial.start_time")).alias("start_time"),
+            F.coalesce(col("updated.end_time"), col("initial.end_time")).alias("end_time"),
+            F.coalesce(col("updated.column_count"), col("initial.column_count")).alias("column_count"),
+            F.coalesce(col("updated.records_processed"), col("initial.records_processed")).alias("records_processed"),
+            F.coalesce(col("updated.records_rejected"), col("initial.records_rejected")).alias("records_rejected"),
+            F.coalesce(col("updated.error_message"), col("initial.error_message")).alias("error_message"),
+            F.coalesce(col("updated.load_date"), col("initial.load_date")).alias("load_date"),
+            F.coalesce(col("updated.comments"), col("initial.comments")).alias("comments"),
+            F.coalesce(col("updated.schema"), col("initial.schema")).alias("schema"),
+        )
+
+        try:
+            write_with_retry(spark, final_status_df, catalog_name, tbl_schema, alert_config.get("job_status_tbl", ""), logger)
+        except Exception as e:
+            logger.log(f"Write operation failed: {str(e)}", "ERROR")
+
+        logger.save_to_s3(alert_config.get("log_reference", "/log_reference/"))
+
+        return 0
+    except Exception as e:
+        error_message = f"Connection failed: {str(e).replace('\\n', ' ')}"
+        print(f"Connection failed: {str(e)}")
+        if "logger" in locals():
+            logger.log(error_message, "ERROR")
+            logger.save_to_s3(alert_config.get("log_reference", "/log_reference/"))
+        return 1
+    finally:
+        if 'spark' in locals():
+            spark.stop()
+
+
+if __name__ == "__main__":
+    exit_code = main()
+    print(f"exit_code in main: {exit_code}")
+    sys.exit(exit_code)
