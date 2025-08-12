@@ -12,14 +12,15 @@ Reconstructed single-file Python module from the provided PDF. The file orchestr
 ## Requirements
 
 - Python 3.12+
-- pyspark (installed locally for running unit tests)
-- A Spark runtime if you intend to run the main ingestion flow
+- Apache Spark 3.4.4
+- PySpark 3.4.x (to match Spark 3.4.4) — install locally to run unit tests
+- A Spark runtime (3.4.4) if you intend to run the main ingestion flow
 - If using S3 features in real runs: appropriate Hadoop/S3 configuration and credentials
 
-Install pyspark for tests:
+Install PySpark 3.4.x (tests):
 ```
 python3 -m pip install --upgrade pip
-python3 -m pip install pyspark
+python3 -m pip install 'pyspark>=3.4,<3.5'
 ```
 
 ## Running unit tests
