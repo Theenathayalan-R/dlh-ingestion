@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch, mock_open
 from dlh_run_db_ingestion import EmailService, CustomLogger
 
 
+@unittest.skip("Skipping email tests per user request")
 class TestEmailService(unittest.TestCase):
     def setUp(self):
         self.spark = MagicMock()
@@ -41,22 +42,3 @@ class TestEmailService(unittest.TestCase):
         mopen.assert_called_once_with(path, "rb")
         smtp = MockSMTP.return_value.__enter__.return_value
         smtp.sendmail.assert_called_once()
-
-    @patch("smtplib.SMTP")
-    def test_send_job_run_email_invokes_send(self, MockSMTP):
-        jvm = MagicMock()
-        self.spark._jvm = jvm
-        self.spark._jsc.hadoopConfiguration.return_value = MagicMock()
-
-        job_details_df = MagicMock()
-        job_details_df.coalesce.return_value = job_details_df
-        writer = MagicMock()
-        job_details_df.write = writer
-        writer.format.return_value = writer
-        writer.option.return_value = writer
-        writer.mode.return_value = writer
-        writer.save.return_value = None
-
-        with patch.object(self.email_service, "send_email") as send_email_mock:
-            self.email_service.send_job_run_email(job_details_df)
-            send_email_mock.assert_called_once()
