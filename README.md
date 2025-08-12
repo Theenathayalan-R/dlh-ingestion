@@ -1,6 +1,11 @@
 # dlh_run_db_ingestion
 
-Reconstructed single-file Python module from the provided PDF. The file orchestrates database ingestion jobs into Iceberg via Spark, includes job tracking and logging to S3, schema change checks, retry-on-write, and optional email notifications.
+A single-file Python module that orchestrates database ingestion jobs into Apache Iceberg using Spark. It includes:
+- Job tracking and status writes
+- Structured logging and optional log persistence to S3
+- Schema change checks and notification hooks
+- Retry-on-write for Iceberg table updates
+- Optional email notifications for batch start, per-job status, and consolidated reports
 
 ## Repository contents
 
@@ -66,8 +71,7 @@ High-level flow (from the reconstructed code):
 
 ## Notes and limitations
 
-- This is a faithful reconstruction from the PDF; logic and structure were preserved as-is without refactoring.
-- Some configuration keys (catalog, schema names, table names, SMTP settings, S3 locations) are read from the Iceberg-stored configs; ensure your environment provides these before executing main().
+- Some configuration keys (catalog, schema names, table names, SMTP settings, S3 locations) are read from Iceberg-stored configs; ensure your environment provides these before executing main().
 - Email functionality requires valid SMTP details; S3 logging requires valid cloud credentials and Hadoop/S3 setup.
 
 ## License
