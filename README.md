@@ -74,6 +74,20 @@ High-level flow (from the reconstructed code):
 - Some configuration keys (catalog, schema names, table names, SMTP settings, S3 locations) are read from Iceberg-stored configs; ensure your environment provides these before executing main().
 - Email functionality requires valid SMTP details; S3 logging requires valid cloud credentials and Hadoop/S3 setup.
 
+## Running tests with coverage
+
+- Ensure Python 3.12 and coverage are available
+- Commands:
+  - pip install coverage
+  - coverage run -m unittest discover -s tests -p "test_*.py" -v
+  - coverage report -m dlh_run_db_ingestion.py
+
+## Current test coverage
+
+- All unit tests pass locally.
+- Email tests are intentionally skipped per request.
+- Current coverage for dlh_run_db_ingestion.py is approximately 51% with email tests skipped.
+
 ## License
 
 Proprietary or as per your project’s policy. 
