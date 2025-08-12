@@ -342,3 +342,253 @@ Thank you.
             )
         except Exception as e:
             self.logger.log(f"Error sending batch start email: {str(e)}", "ERROR")
+def read_config_from_iceberg(spark, catalog_name, database, table, app_pipeline, run_group, logger):
+    try:
+        config_df = spark.sql(f"""
+SELECT *
+FROM {catalog_name}.{database}.{table}
+WHERE app_pipeline = '{app_pipeline}' AND run_group = '{run_group}' AND is_active = 'Y'
+""")
+        logger.log(f"Successfully read configuration from {catalog_name}.{database}.{table}", "INFO")
+        config_list = config_df.collect()
+        if not config_list:
+            raise ValueError("Configuration table is empty or no matching run_group found")
+        return config_list[0]
+    except Exception as e:
+        logger.log(f"Error reading configuration from {catalog_name}.{database}.{table}: {str(e)}", "ERROR")
+        raise
+
+
+def connect_to_oracle(spark, url, query, user, password, driver, logger):
+    try:
+        data_df = (
+            spark.read
+            .format("jdbc")
+            .option("url", url)
+            .option("query", query)
+            .option("user", user)
+            .option("password", password)
+            .option("driver", driver)
+            .load()
+        )
+        logger.log("Oracle connection is made successfully", "INFO")
+        return data_df
+    except Exception as e:
+        logger.log(f"Error connecting to Oracle: {str(e)}", "ERROR")
+        error_message = str(e)
+        raise
+
+
+def connect_to_mssql(spark, url, query, user, password, driver, encrypt, certificate, logger):
+    try:
+        source_df = (
+            spark.read
+            .format("jdbc")
+            .option("driver", driver)
+            .option("url", url)
+            .option("query", query)
+            .option("user", user)
+            .option("password", password)
+            .option("Encrypt", encrypt)
+            .option("TrustServerCertificate", certificate)
+            .load()
+        )
+        logger.log("MSSQL connection is made successfully", "INFO")
+        return source_df
+    except Exception as e:
+        logger.log(f"Error connecting to MSSQL: {str(e)}", "ERROR")
+        error_message = str(e)
+        raise
+
+
+def connect_to_mssql_columns(spark, url, query, user, password, driver, encrypt, certificate, logger):
+    try:
+        columns_df = (
+            spark.read
+            .format("jdbc")
+            .option("driver", driver)
+            .option("url", url)
+            .option("query", query)
+            .option("user", user)
+            .option("password", password)
+            .option("Encrypt", encrypt)
+            .option("TrustServerCertificate", certificate)
+            .load()
+        )
+        columns = columns_df.collect()
+        logger.log("MSSQL connection is made successfully", "INFO")
+        column_list = [f"[{row['COLUMN_NAME']}] as {sanitize_column_name(row['COLUMN_NAME'], logger)}" for row in columns]
+        return ",".join(column_list)
+    except Exception as e:
+        logger.log(f"Error connecting to MSSQL columns: {str(e)}", "ERROR")
+        raise
+
+
+def sanitize_column_name(col_name, logger):
+    try:
+        for char in string.punctuation:
+            if char != "_":
+                col_name = col_name.replace(char, " ")
+        col_name = re.sub(r"\s+", " ", col_name).strip()
+        col_name = re.sub(r"[^A-Za-z0-9_]", "_", col_name)
+        col_name = col_name.replace(" ", "_")
+        col_name = re.sub(r"_+", "_", col_name).strip("_")
+        return col_name
+    except Exception as e:
+        logger.log(f"Error sanitizing column name: {str(e)}", "ERROR")
+        raise
+
+
+def map_data_types(spark, data_df, cdc_modified_date_column, cdc_created_date_column, sourcedb_conn, sourcedb_user, sourcedb_pass, sourcedb_driver, sourcedb_tblname, logger):
+    try:
+        mapped_columns = []
+        for row in data_df.collect():
+            col_name = row["COLUMN_NAME"]
+            data_type = row["DATA_TYPE"]
+            if data_type == "NUMBER":
+                query = f"SELECT COUNT(*) as DECIMAL_COUNT FROM {sourcedb_tblname} WHERE {col_name} != TRUNC({col_name})"
+                data_scale_df = connect_to_oracle(spark, sourcedb_conn, query, sourcedb_user, sourcedb_pass, sourcedb_driver, logger)
+                data_scale = data_scale_df.first()["DECIMAL_COUNT"]
+                if data_scale > 0:
+                    query = f"SELECT CAST(MAX(LENGTH(SUBSTR({col_name}, INSTR({col_name}, '.') + 1))) AS INT) AS DATA_SCALE FROM {sourcedb_tblname} WHERE {col_name} != TRUNC({col_name})"
+                    data_scale_df = connect_to_oracle(spark, sourcedb_conn, query, sourcedb_user, sourcedb_pass, sourcedb_driver, logger)
+                    data_scale = data_scale_df.first()["DATA_SCALE"]
+                    mapped_type = f"DECIMAL(38, {data_scale})"
+                else:
+                    mapped_type = "LONG"
+            elif data_type == "VARCHAR2":
+                mapped_type = "STRING"
+            elif data_type == "DATE":
+                mapped_type = "TIMESTAMP"
+            elif data_type == "TIMESTAMP":
+                mapped_type = "TIMESTAMP"
+            elif data_type == "BLOB":
+                mapped_type = "BINARY"
+            elif data_type == "TIMESTAMP(6) WITH TIME ZONE":
+                mapped_type = "TIMESTAMP"
+            elif data_type == "TIMESTAMP(6)":
+                mapped_type = "TIMESTAMP"
+            else:
+                mapped_type = "STRING"
+            mapped_columns.append(f"{col_name} {mapped_type}")
+        return ", ".join(mapped_columns)
+    except Exception as e:
+        logger.log(f"Error mapping data types: {str(e)}", "ERROR")
+        raise
+
+
+def fetch_data_from_oracle(spark, sourcedb_conn, sourcedb_tblname, sourcedb_user, sourcedb_pass, sourcedb_driver, data_df, cdc_modified_date_column, cdc_created_date_column, source_where_clause, source_fields, logger, source_table):
+    try:
+        schema_string = map_data_types(
+            spark,
+            data_df,
+            cdc_modified_date_column,
+            cdc_created_date_column,
+            sourcedb_conn,
+            sourcedb_user,
+            sourcedb_pass,
+            sourcedb_driver,
+            sourcedb_tblname,
+            logger
+        )
+
+        if (not source_where_clause or source_where_clause == "") and (not source_fields or source_fields == ""):
+            query = f"SELECT /*+ PARALLEL(16) */ * FROM {sourcedb_tblname}"
+        elif (not source_fields or source_fields == "") and (source_where_clause and source_where_clause != ""):
+            query = f"SELECT * FROM {sourcedb_tblname} WHERE {source_where_clause}"
+        elif (source_fields and source_fields != "") and (not source_where_clause or source_where_clause == ""):
+            query = f"SELECT {source_fields} FROM {sourcedb_tblname}"
+        else:
+            query = f"SELECT {source_fields} FROM {sourcedb_tblname} WHERE {source_where_clause}"
+
+        source_df = read_from_jdbc(
+            spark=spark,
+            url=sourcedb_conn,
+            query=query,
+            user=sourcedb_user,
+            password=sourcedb_pass,
+            driver=sourcedb_driver,
+            schema_string=schema_string,
+            source_table=source_table,
+            dbtable=sourcedb_tblname,
+            logger=logger
+        )
+        logger.log("Oracle connection is made successfully and data fetched", "INFO")
+        return source_df
+    except Exception as e:
+        logger.log(f"Error fetching data from Oracle: {str(e)}", "ERROR")
+        raise
+
+
+def read_from_jdbc(spark, url, query, user, password, driver, schema_string, source_table, dbtable, logger):
+    try:
+        object_name_query = f"""
+SELECT OBJECT_TYPE FROM ALL_OBJECTS
+WHERE OBJECT_NAME = '{dbtable.split('.')[-1]}' AND OWNER = '{dbtable.split('.')[0]}'
+"""
+        object_name_df = (
+            spark.read
+            .format("jdbc")
+            .option("url", url)
+            .option("query", object_name_query)
+            .option("user", user)
+            .option("password", password)
+            .option("driver", driver)
+            .load()
+        )
+        OBJECT_TYPE = object_name_df.first()["OBJECT_TYPE"] if not object_name_df.rdd.isEmpty() else None
+        if OBJECT_TYPE is None:
+            raise ValueError(f"Object type for table '{source_table}' in schema '{dbtable.split('.')[0]}' could not be determined. Please check the table or view existence.")
+
+        if OBJECT_TYPE == "TABLE":
+            metadata_query = f"SELECT CAST(NUM_ROWS AS NUMBER) AS NUM_ROWS FROM ALL_TABLES WHERE TABLE_NAME = '{dbtable.split('.')[-1]}' and OWNER = '{dbtable.split('.')[0]}'"
+        elif OBJECT_TYPE == "VIEW":
+            metadata_query = f"SELECT count(*) as NUM_ROWS FROM {dbtable}"
+        else:
+            metadata_query = f"SELECT 0 as NUM_ROWS"
+
+        metadata_df = (
+            spark.read
+            .format("jdbc")
+            .option("url", url)
+            .option("query", metadata_query)
+            .option("user", user)
+            .option("password", password)
+            .option("driver", driver)
+            .load()
+        )
+        row_count = metadata_df.first()["NUM_ROWS"] or 0
+
+        if row_count == 0:
+            fetchsize = 20
+        elif row_count <= 100:
+            fetchsize = 50
+        elif row_count <= 500:
+            fetchsize = 100
+        elif row_count <= 5000:
+            fetchsize = 200
+        elif row_count <= 20000:
+            fetchsize = 500
+        elif row_count <= 50000:
+            fetchsize = 1000
+        elif row_count <= 100000:
+            fetchsize = 5000
+        else:
+            fetchsize = 10000
+
+        source_df = (
+            spark.read
+            .format("jdbc")
+            .option("url", url)
+            .option("query", query)
+            .option("user", user)
+            .option("password", password)
+            .option("driver", driver)
+            .option("customSchema", schema_string)
+            .option("fetchsize", fetchsize)
+            .load()
+        )
+        return source_df
+    except Exception as e:
+        logger.log(f"Error reading from JDBC: {str(e)}", "ERROR")
+        raise
