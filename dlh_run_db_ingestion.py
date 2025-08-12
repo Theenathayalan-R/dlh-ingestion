@@ -592,3 +592,64 @@ WHERE OBJECT_NAME = '{dbtable.split('.')[-1]}' AND OWNER = '{dbtable.split('.')[
     except Exception as e:
         logger.log(f"Error reading from JDBC: {str(e)}", "ERROR")
         raise
+def get_run_id(spark, catalog_name, database, job_status_tbl, batch_id, logger):
+    try:
+        query = f"""
+SELECT run_id
+FROM {catalog_name}.{database}.{job_status_tbl}
+WHERE batch_id = '{batch_id}'
+ORDER BY start_time
+"""
+        run_id_df = spark.sql(query)
+        if run_id_df.count() == 0 or run_id_df.rdd.isEmpty():
+            return None
+        return run_id_df.first()["run_id"]
+    except Exception as e:
+        logger.log(f"Error fetching run id: {str(e)}", "ERROR")
+        raise
+
+
+def classify_error(spark, error_message, logger):
+    """
+    Classify an error message and return error metadata.
+
+    Args:
+        spark: SparkSession instance
+        error_message: error message to classify
+
+    Returns:
+        dict: { 'error_type': ..., 'description': ... }
+    """
+    try:
+        error_patterns_data = [
+            ("ORA-01017|invalid username/password|Login failed", "CRITICAL", "Invalid Credentials"),
+            ("ORA-12541|no listener|connection refused", "CRITICAL", "Connection refused"),
+            ("timeout|connection reset|network error", "CRITICAL", "Network Connectivity issue"),
+            ("ORA-01031|insufficient privileges", "CRITICAL", "Insufficient permissions"),
+            ("ORA-00942|table or view does not exist|table not found", "NON_CRITICAL", "Table or view does not exist"),
+            ("ORA-00904|invalid column", "NON_CRITICAL", "Invalid column"),
+        ]
+
+        pattern_schema = StructType([
+            StructField("pattern", StringType(), False),
+            StructField("error_type", StringType(), False),
+            StructField("description", StringType(), False),
+        ])
+
+        patterns_df = spark.createDataFrame(error_patterns_data, pattern_schema)
+        error_df = spark.createDataFrame([(error_message,)], StructType([StructField("error_message", StringType(), False)]))
+
+        matched = (
+            error_df.crossJoin(patterns_df)
+            .withColumn("matches", F.col("error_message").rlike(F.col("pattern")))
+            .filter(F.col("matches") == True)
+            .select("error_type", "description")
+            .first()
+        )
+
+        if matched:
+            return {"error_type": matched["error_type"], "description": matched["description"]}
+        return {"error_type": "NON_CRITICAL", "description": "Error occurred"}
+    except Exception as e:
+        logger.log(f"Error classifying error message: {str(e)}", "ERROR")
+        raise
