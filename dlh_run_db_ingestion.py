@@ -760,3 +760,528 @@ def handle_job_completion_or_failure(
     except Exception as e:
         logger.log(f"Error during job completion or failure handling: {str(e)}", "ERROR")
         raise
+def create_table(
+    spark,
+    source_db_type,
+    table_name,
+    source_df,
+    target_partition_by,
+    logger,
+    target_table_options,
+    target_recreate,
+    catalog_name,
+    target_truncate,
+):
+    try:
+        load_date = None
+        if target_partition_by and target_partition_by.strip().upper() == "SNAPSHOT_DATE":
+            load_date = datetime.datetime.now().strftime("%Y%m%d")
+            source_df = source_df.withColumn("SNAPSHOT_DATE", lit(load_date))
+
+        if target_truncate and str(target_truncate).upper() == "Y":
+            truncate_sql = f"TRUNCATE TABLE {table_name}"
+            spark.sql(truncate_sql)
+            logger.log(f"All partitions and files for table {table_name} have been deleted.", "INFO")
+            spark.sql(f"ALTER TABLE {table_name} SET TBLPROPERTIES ('write.spark.accept-any-schema'='true')")
+
+        if target_table_options:
+            pass
+
+        writer = source_df.write.format("iceberg").option("mergeSchema", "true")
+        mode = "append" if not target_recreate else "overwrite"
+        writer = writer.mode(mode)
+
+        partition_column = None
+        partition_expression = None
+        if target_partition_by and "=" in str(target_partition_by):
+            parts = target_partition_by.split("=", 1)
+            partition_column = parts[0].strip()
+            partition_expression = parts[1].strip()
+            if partition_expression and "SELECT" in partition_expression.upper():
+                try:
+                    cleaned = partition_expression.replace("(", "").replace(")", "")
+                    df_expr = spark.sql(cleaned)
+                    colname = df_expr.columns[0]
+                    val = df_expr.first()[colname]
+                    source_df = source_df.withColumn(partition_column, lit(val))
+                except Exception as e:
+                    raise ValueError("Invalid SELECT query format in partition_expression.")
+            elif partition_expression:
+                source_df = source_df.withColumn(partition_column, expr(partition_expression))
+        elif target_partition_by and target_partition_by.strip():
+            partition_column = target_partition_by.strip()
+
+        if partition_column:
+            writer = writer.partitionBy(partition_column)
+
+        writer.saveAsTable(table_name)
+        logger.log(f"DataFrame written to Iceberg table {table_name} successfully.", "INFO")
+        return load_date
+    except Exception as e:
+        logger.log(f"Error writing DataFrame to Iceberg table {table_name}: {e}", "ERROR")
+        raise
+
+
+def full_load_mssql(
+    spark,
+    source_df,
+    table_name,
+    target_partition_by,
+    logger,
+    job_id,
+    app_name,
+    run_group,
+    is_enabled,
+    source_schema,
+    source_table,
+    catalog_name,
+    tbl_schema,
+    cdc_tracker_tbl,
+    target_truncate,
+    target_partition_overwrite,
+    query,
+):
+    try:
+        if target_partition_overwrite and str(target_partition_overwrite).upper() == "Y":
+            spark.sql(f"ALTER TABLE {table_name} SET TBLPROPERTIES ('write.spark.accept-any-schema'='true')")
+        load_date = create_table(
+            spark,
+            "MSSQL",
+            table_name,
+            source_df,
+            target_partition_by,
+            logger,
+            None,
+            False,
+            catalog_name,
+            target_truncate,
+        )
+        return load_date
+    except Exception as e:
+        logger.log(f"Error during full load for table {table_name}: {str(e)}", "ERROR")
+        raise
+
+
+def incremental_load_mssql(
+    spark,
+    source_df,
+    table_name,
+    target_partition_by,
+    logger,
+    lock,
+    job_id,
+    app_name,
+    run_group,
+    is_enabled,
+    source_schema,
+    source_table,
+    updated_at,
+    cdc_type,
+    cdc_modified_date_column,
+    cdc_append_key_column,
+    catalog_name,
+    tbl_schema,
+    cdc_tracker_tbl,
+    target_truncate,
+    target_partition_overwrite,
+    query,
+):
+    try:
+        if target_partition_overwrite and str(target_partition_overwrite).upper() == "Y":
+            spark.sql(f"ALTER TABLE {table_name} SET TBLPROPERTIES ('write.spark.accept-any-schema'='true')")
+        load_date = create_table(
+            spark,
+            "MSSQL",
+            table_name,
+            source_df,
+            target_partition_by,
+            logger,
+            None,
+            False,
+            catalog_name,
+            target_truncate,
+        )
+        return load_date
+    except Exception as e:
+        logger.log(f"Error during incremental load for table {table_name}: {str(e)}", "ERROR")
+        raise
+
+
+def process_table(
+    row,
+    spark,
+    env,
+    batch_id,
+    spark_app_id,
+    catalog_name,
+    tbl_schema,
+    job_status_tbl,
+    cdc_tracker_tbl,
+    s3_bucket,
+    source_db_config,
+    dbpass,
+    email_service,
+    logger,
+    lock,
+    formatted_date,
+    statusEmails,
+    job_tracker,
+    run_id,
+):
+    try:
+        job_id = row["job_id"]
+        source_schema = row["source_schema"]
+        source_table = row["source_table"]
+        target_schema = row["target_schema"]
+        target_table = row["target_table"]
+        table_name = f"{catalog_name}.{target_schema}.{target_table}"
+        app_name = row["app_pipeline"]
+        run_group = row["run_group"]
+        is_enabled = row["is_enabled"]
+        load_type = row.get("load_type")
+        target_partition_by = row.get("target_partition_by")
+        target_truncate = row.get("target_truncate")
+        target_partition_overwrite = row.get("target_partition_overwrite")
+        target_table_options = row.get("target_table_options")
+        target_recreate = row.get("target_recreate")
+        source_fields = row.get("source_fields")
+        source_where_clause = row.get("source_where_clause")
+        cdc_type = row.get("cdc_type")
+        cdc_modified_date_column = row.get("cdc_modified_date_column")
+        cdc_created_date_column = row.get("cdc_created_date_column")
+        cdc_append_key_column = row.get("cdc_append_key_column")
+        source_db_type = source_db_config["db_type"]
+
+        updated_status_df = job_tracker.insert_initial_status()
+
+        if source_db_type.upper() == "ORACLE":
+            url = source_db_config["url"]
+            user = source_db_config["db_user"]
+            driver = source_db_config["driver"]
+            dbtable = f"{source_schema}.{source_table}"
+
+            meta_query = f"""
+SELECT COLUMN_NAME, DATA_TYPE
+FROM ALL_TAB_COLUMNS
+WHERE TABLE_NAME = '{source_table.upper()}' AND OWNER = '{source_schema.upper()}'
+"""
+            data_df = connect_to_oracle(spark, url, meta_query, user, dbpass, driver, logger)
+
+            if load_type and load_type.upper() == "INCREMENTAL":
+                updated_at_df = spark.sql(
+                    f"select max(updated_at) as max_updated_at from {catalog_name}.{tbl_schema}.{cdc_tracker_tbl} "
+                    f"where source_table='{source_table}' and job_id='{job_id}'"
+                )
+                updated_at = None
+                if not updated_at_df.rdd.isEmpty():
+                    row_upd = updated_at_df.select("max_updated_at").distinct().collect()[0]
+                    updated_at = row_upd["max_updated_at"]
+
+                if cdc_type and cdc_type.upper() == "TIMESTAMP":
+                    CURR_TS = datetime.datetime.now().strftime("%Y%m%d%H")
+                    if updated_at:
+                        conds = []
+                        if cdc_modified_date_column:
+                            conds.append(
+                                f"to_char({cdc_modified_date_column}, 'YYYYMMDDHH24') >= {updated_at} AND "
+                                f"to_char({cdc_modified_date_column}, 'YYYYMMDDHH24') < {CURR_TS}"
+                            )
+                        if cdc_created_date_column:
+                            conds.append(
+                                f"to_char({cdc_created_date_column}, 'YYYYMMDDHH24') >= {updated_at} AND "
+                                f"to_char({cdc_created_date_column}, 'YYYYMMDDHH24') < {CURR_TS}"
+                            )
+                        date_clause = " OR ".join(conds) if conds else None
+                    else:
+                        CURR_TS = datetime.datetime.now().strftime("%Y%m%d%H")
+                        conds = []
+                        if cdc_modified_date_column:
+                            conds.append(f"to_char({cdc_modified_date_column}, 'YYYYMMDDHH24') < {CURR_TS}")
+                        if cdc_created_date_column:
+                            conds.append(f"to_char({cdc_created_date_column}, 'YYYYMMDDHH24') < {CURR_TS}")
+                        date_clause = " OR ".join(conds) if conds else None
+
+                    if source_fields and source_fields.strip():
+                        select_cols = source_fields
+                    else:
+                        select_cols = "*"
+
+                    where_parts = []
+                    if date_clause:
+                        where_parts.append(f"({date_clause})")
+                    if source_where_clause and source_where_clause.strip():
+                        where_parts.append(source_where_clause)
+                    where_sql = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
+                    query = f"SELECT {select_cols} FROM {dbtable}{where_sql}"
+
+                elif cdc_type and cdc_type.upper() == "APPEND_KEY" and cdc_append_key_column:
+                    max_df = spark.read.format("jdbc").option("url", url).option(
+                        "query", f"SELECT MAX({cdc_append_key_column}) as MAX_VALUE FROM {dbtable}"
+                    ).option("user", user).option("password", dbpass).option("driver", driver).load()
+                    max_value = None if max_df.rdd.isEmpty() else max_df.first()["MAX_VALUE"]
+                    if updated_at is None:
+                        updated_at = max_value
+
+                    if source_fields and source_fields.strip():
+                        select_cols = source_fields
+                    else:
+                        select_cols = "*"
+
+                    where_parts = []
+                    if updated_at is not None and max_value is not None:
+                        where_parts.append(f"{cdc_append_key_column} > {updated_at} AND {cdc_append_key_column} <= {max_value}")
+                    if source_where_clause and source_where_clause.strip():
+                        where_parts.append(source_where_clause)
+                    where_sql = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
+                    query = f"SELECT {select_cols} FROM {dbtable}{where_sql}"
+                else:
+                    if source_fields and source_fields.strip():
+                        select_cols = source_fields
+                    else:
+                        select_cols = "*"
+                    where_sql = f" WHERE {source_where_clause}" if source_where_clause and source_where_clause.strip() else ""
+                    query = f"SELECT {select_cols} FROM {dbtable}{where_sql}"
+
+                source_df = fetch_data_from_oracle(
+                    spark,
+                    url,
+                    dbtable,
+                    user,
+                    dbpass,
+                    driver,
+                    data_df,
+                    cdc_modified_date_column,
+                    cdc_created_date_column,
+                    source_where_clause,
+                    source_fields,
+                    logger,
+                    source_table,
+                )
+                column_count = len(source_df.columns)
+                load_date = create_table(
+                    spark,
+                    source_db_type,
+                    table_name,
+                    source_df,
+                    target_partition_by,
+                    logger,
+                    target_table_options,
+                    target_recreate,
+                    catalog_name,
+                    target_truncate,
+                )
+            else:
+                source_df = fetch_data_from_oracle(
+                    spark,
+                    url,
+                    dbtable,
+                    user,
+                    dbpass,
+                    driver,
+                    data_df,
+                    cdc_modified_date_column,
+                    cdc_created_date_column,
+                    source_where_clause,
+                    source_fields,
+                    logger,
+                    source_table,
+                )
+                column_count = len(source_df.columns)
+                load_date = create_table(
+                    spark,
+                    source_db_type,
+                    table_name,
+                    source_df,
+                    target_partition_by,
+                    logger,
+                    target_table_options,
+                    target_recreate,
+                    catalog_name,
+                    target_truncate,
+                )
+
+            end_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            start_time = updated_status_df.select("start_time").first()["start_time"]
+            updated_status_df = handle_job_completion_or_failure(
+                spark=spark,
+                source_df=source_df,
+                email_service=email_service,
+                logger=logger,
+                job_id=job_id,
+                source_schema=source_schema,
+                source_table=source_table,
+                target_schema=target_schema,
+                target_table=target_table,
+                batch_id=batch_id,
+                run_id=run_id,
+                spark_app_id=spark_app_id,
+                catalog_name=catalog_name,
+                tbl_schema=tbl_schema,
+                job_status_tbl=job_status_tbl,
+                error_message=None,
+                statusEmails=statusEmails,
+                load_date=load_date,
+                start_time=start_time,
+                end_time=end_time,
+            )
+            return updated_status_df
+
+        elif source_db_type.upper() == "MSSQL":
+            url = f"jdbc:sqlserver://{source_db_config['db_host']}.database.windows.net:{source_db_config['db_port']};database={source_db_config['db_name']}"
+            user = source_db_config["db_user"]
+            driver = source_db_config["driver"]
+            encrypt = source_db_config.get("encrypt", "true")
+            certificate = source_db_config.get("trustservercertificate", "false")
+            dbtable = f"{source_schema}.{source_table}"
+
+            column_query = f"SELECT TOP 100 PERCENT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '{dbtable.split('.')[-1]}' AND TABLE_SCHEMA = '{dbtable.split('.')[0]}' ORDER BY ORDINAL_POSITION"
+            safe_columns = connect_to_mssql_columns(spark, url, column_query, user, dbpass, driver, encrypt, certificate, logger)
+            if not safe_columns:
+                logger.log(f"No columns found for the table {dbtable}.", "ERROR")
+                raise ValueError(f"No columns found for the table {dbtable}.")
+
+            if load_type and load_type.upper() == "FULL":
+                if (not source_where_clause) and (not source_fields):
+                    query = f"SELECT {safe_columns} FROM {dbtable}"
+                elif (not source_fields) and source_where_clause:
+                    query = f"SELECT {safe_columns} FROM {dbtable} WHERE {source_where_clause}"
+                elif source_fields and (not source_where_clause):
+                    query = f"SELECT {source_fields} FROM {dbtable}"
+                else:
+                    query = f"SELECT {source_fields} FROM {dbtable} WHERE {source_where_clause}"
+
+                source_df = connect_to_mssql(spark, url, query, user, dbpass, driver, encrypt, certificate, logger)
+                column_count = len(source_df.columns)
+                load_date = full_load_mssql(
+                    spark,
+                    source_df,
+                    table_name,
+                    target_partition_by,
+                    logger,
+                    job_id,
+                    app_name,
+                    run_group,
+                    is_enabled,
+                    source_schema,
+                    source_table,
+                    catalog_name,
+                    tbl_schema,
+                    cdc_tracker_tbl,
+                    target_truncate,
+                    target_partition_overwrite,
+                    query,
+                )
+            else:
+                updated_at_df = spark.sql(
+                    f"select max(updated_at) as max_updated_at from {catalog_name}.{tbl_schema}.{cdc_tracker_tbl} "
+                    f"where source_table='{source_table}' and job_id='{job_id}'"
+                )
+                updated_at = None
+                if not updated_at_df.rdd.isEmpty():
+                    row_upd = updated_at_df.select("max_updated_at").distinct().collect()[0]
+                    updated_at = row_upd["max_updated_at"]
+
+                if cdc_type and cdc_type.upper() == "TIMESTAMP":
+                    CURR_TS = datetime.datetime.now().strftime("%Y%m%d%H")
+                    where_parts = []
+                    if updated_at:
+                        conds = []
+                        if cdc_modified_date_column:
+                            conds.append(f"FORMAT({cdc_modified_date_column}, 'yyyyMMddHH') >= {updated_at} AND FORMAT({cdc_modified_date_column}, 'yyyyMMddHH') < {CURR_TS}")
+                        if cdc_created_date_column:
+                            conds.append(f"FORMAT({cdc_created_date_column}, 'yyyyMMddHH') >= {updated_at} AND FORMAT({cdc_created_date_column}, 'yyyyMMddHH') < {CURR_TS}")
+                        if conds:
+                            where_parts.append(f"({' OR '.join(conds)})")
+                    else:
+                        conds = []
+                        if cdc_modified_date_column:
+                            conds.append(f"FORMAT({cdc_modified_date_column}, 'yyyyMMddHH') < {CURR_TS}")
+                        if cdc_created_date_column:
+                            conds.append(f"FORMAT({cdc_created_date_column}, 'yyyyMMddHH') < {CURR_TS}")
+                        if conds:
+                            where_parts.append(f"({' OR '.join(conds)})")
+
+                    if source_where_clause and source_where_clause.strip():
+                        where_parts.append(source_where_clause)
+                    where_sql = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
+                    select_cols = source_fields if source_fields and source_fields.strip() else safe_columns
+                    query = f"SELECT {select_cols} FROM {dbtable}{where_sql}"
+
+                elif cdc_type and cdc_type.upper() == "APPEND_KEY" and cdc_append_key_column:
+                    max_df = spark.read.format("jdbc").option("driver", driver).option("url", url).option(
+                        "query", f"SELECT MAX({cdc_append_key_column}) as MAX_VALUE FROM {dbtable}"
+                    ).option("user", user).option("password", dbpass).option("Encrypt", encrypt).option("TrustServerCertificate", certificate).load()
+                    max_value = None if max_df.rdd.isEmpty() else max_df.first()["MAX_VALUE"]
+                    if updated_at is None:
+                        updated_at = max_value
+
+                    where_parts = []
+                    if updated_at is not None and max_value is not None:
+                        where_parts.append(f"{cdc_append_key_column} > {updated_at} AND {cdc_append_key_column} <= {max_value}")
+                    if source_where_clause and source_where_clause.strip():
+                        where_parts.append(source_where_clause)
+                    where_sql = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
+                    select_cols = source_fields if source_fields and source_fields.strip() else safe_columns
+                    query = f"SELECT {select_cols} FROM {dbtable}{where_sql}"
+                else:
+                    select_cols = source_fields if source_fields and source_fields.strip() else safe_columns
+                    where_sql = f" WHERE {source_where_clause}" if source_where_clause and source_where_clause.strip() else ""
+                    query = f"SELECT {select_cols} FROM {dbtable}{where_sql}"
+
+                source_df = connect_to_mssql(spark, url, query, user, dbpass, driver, encrypt, certificate, logger)
+                column_count = len(source_df.columns)
+                load_date = incremental_load_mssql(
+                    spark,
+                    source_df,
+                    table_name,
+                    target_partition_by,
+                    logger,
+                    lock,
+                    job_id,
+                    app_name,
+                    run_group,
+                    is_enabled,
+                    source_schema,
+                    source_table,
+                    updated_at,
+                    cdc_type,
+                    cdc_modified_date_column,
+                    cdc_append_key_column,
+                    catalog_name,
+                    tbl_schema,
+                    cdc_tracker_tbl,
+                    target_truncate,
+                    target_partition_overwrite,
+                    query,
+                )
+
+            end_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            start_time = updated_status_df.select("start_time").first()["start_time"]
+            updated_status_df = handle_job_completion_or_failure(
+                spark=spark,
+                source_df=source_df,
+                email_service=email_service,
+                logger=logger,
+                job_id=job_id,
+                source_schema=source_schema,
+                source_table=source_table,
+                target_schema=target_schema,
+                target_table=target_table,
+                batch_id=batch_id,
+                run_id=run_id,
+                spark_app_id=spark_app_id,
+                catalog_name=catalog_name,
+                tbl_schema=tbl_schema,
+                job_status_tbl=job_status_tbl,
+                error_message=None,
+                statusEmails=statusEmails,
+                load_date=load_date,
+                start_time=start_time,
+                end_time=end_time,
+            )
+            return updated_status_df
+        else:
+            raise ValueError(f"Unsupported source_db_type: {source_db_type}")
+    except Exception as e:
+        logger.log(f"Error in process_table for {row.get('job_id')}: {str(e)}", "ERROR")
+        raise
