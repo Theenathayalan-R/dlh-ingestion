@@ -75,6 +75,15 @@ High-level flow (from the reconstructed code):
 - Email functionality requires valid SMTP details; S3 logging requires valid cloud credentials and Hadoop/S3 setup.
 
 ## Running tests with coverage
+## FAIR scheduling and per-job pools
+
+This module enables Spark FAIR scheduling at runtime and assigns a per-job scheduler pool when processing each table. To ensure concurrent execution across jobs, run with FAIR enabled (you can also set it via spark-submit):
+
+Recommended spark-submit flags:
+- --conf spark.scheduler.mode=FAIR
+- Optionally: --conf spark.scheduler.allocation.file=/path/to/fairscheduler.xml
+
+The code assigns a distinct pool per job using the SparkContext local property "spark.scheduler.pool" so that jobs submitted via ThreadPoolExecutor can run concurrently under FAIR scheduling.
 
 - Ensure Python 3.12 and coverage are available
 - Commands:
