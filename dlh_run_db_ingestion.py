@@ -955,6 +955,12 @@ def process_table(
         cdc_append_key_column = row.get("cdc_append_key_column")
         source_db_type = source_db_config["db_type"]
 
+        try:
+            if hasattr(spark, "sparkContext"):
+                spark.sparkContext.setLocalProperty("spark.scheduler.pool", f"pool-{job_id}")
+        except Exception:
+            pass
+
         updated_status_df = job_tracker.insert_initial_status()
 
         if source_db_type.upper() == "ORACLE":
@@ -1288,6 +1294,12 @@ WHERE TABLE_NAME = '{source_table.upper()}' AND OWNER = '{source_schema.upper()}
     except Exception as e:
         logger.log(f"Error in process_table for {row.get('job_id')}: {str(e)}", "ERROR")
         raise
+    finally:
+        try:
+            if hasattr(spark, "sparkContext"):
+                spark.sparkContext.setLocalProperty("spark.scheduler.pool", None)
+        except Exception:
+            pass
 def write_with_retry(spark, df, catalog_name, tbl_schema, job_status_tbl, logger, retry_delay: int = 5, max_retries: int = 50):
     try:
         table_name = f"{catalog_name}.{tbl_schema}.{job_status_tbl}"
@@ -1330,6 +1342,11 @@ GROUP BY job_id
 def main():
     try:
         spark = SparkSession.builder.getOrCreate()
+        try:
+            spark.conf.set("spark.scheduler.mode", "FAIR")
+        except Exception:
+            pass
+
         if len(sys.argv) < 4:
             print("Usage: script.py <run_group> <app_pipeline> <env> [rerun]")
             sys.exit(1)
@@ -1398,6 +1415,12 @@ def main():
             if failed_jobs_df.count() == 0:
                 print("No failed jobs found for rerun.")
                 return 0
+
+        try:
+            if hasattr(spark, "sparkContext"):
+                spark.sparkContext.setLocalProperty("spark.scheduler.pool", "main")
+        except Exception:
+            pass
 
         spark_app_id = spark.sparkContext.applicationId
         print(f"Spark Application id: {spark_app_id}")
