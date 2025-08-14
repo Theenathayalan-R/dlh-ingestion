@@ -523,65 +523,384 @@ def fetch_data_from_oracle(spark, sourcedb_conn, sourcedb_tblname, sourcedb_user
         raise
 
 
-def read_from_jdbc(spark, url, query, user, password, driver, schema_string, source_table, dbtable, logger):
+def probe_read(spark, url, dbtable, user, password, driver, logger, limit=500, fetchsize=300, customSchema=None, target_batch_bytes=None, max_fetchsize_override=10000):
+    """Lightweight probe to gather runtime metrics and suggest a fetchsize.
+
+    Intended for DEV / exploratory runs (guarded by spark.conf dlh.jdbc.enableProbe).
+    Strategy:
+      1. Execute a limited SELECT (ROWNUM filter) to pull up to `limit` rows.
+      2. Measure elapsed time and collected row count.
+      3. Estimate average row bytes from a small sample (string length heuristic).
+      4. Derive a recommended fetchsize = min(target_batch_bytes / avg_row_bytes, max_override).
+
+    Returns dict with metrics; does NOT raise if probe fails (logs warning and returns {}).
+    """
     try:
-        object_name_query = f"""
+        import time
+        start = time.time()
+        probe_query = f"SELECT * FROM {dbtable} WHERE ROWNUM <= {int(limit)}"
+        reader = (spark.read.format("jdbc")
+                  .option("url", url)
+                  .option("query", probe_query)
+                  .option("user", user)
+                  .option("password", password)
+                  .option("driver", driver)
+                  .option("fetchsize", int(fetchsize)))
+        if customSchema:
+            reader = reader.option("customSchema", customSchema)
+        probe_df = reader.load()
+        row_count = probe_df.count()
+        sample_n = min(row_count, 50)
+        est_row_bytes = None
+        if sample_n > 0:
+            sample_rows = probe_df.take(sample_n)
+            total_bytes = 0
+            for r in sample_rows:
+                # crude heuristic: len(str(value)) per field
+                total_bytes += sum(len(str(v)) if v is not None else 1 for v in r)
+            est_row_bytes = max(1, int(total_bytes / sample_n))
+        elapsed_ms = int((time.time() - start) * 1000)
+        throughput_rps = (row_count / (elapsed_ms/1000.0)) if elapsed_ms > 0 else None
+        recommended_fetch = None
+        if est_row_bytes and target_batch_bytes:
+            recommended_fetch = int(target_batch_bytes / est_row_bytes)
+            if recommended_fetch < 50:
+                recommended_fetch = 50
+            if recommended_fetch > max_fetchsize_override:
+                recommended_fetch = max_fetchsize_override
+        metrics = {
+            "probe_limit": int(limit),
+            "rows_returned": row_count,
+            "elapsed_ms": elapsed_ms,
+            "throughput_rows_per_sec": int(throughput_rps) if throughput_rps else None,
+            "est_row_bytes": est_row_bytes,
+            "recommended_fetchsize": recommended_fetch,
+        }
+        logger.log(f"Probe metrics -> limit={limit}, rows={row_count}, elapsed_ms={elapsed_ms}, est_row_bytes={est_row_bytes}, recommended_fetchsize={recommended_fetch}", "INFO")
+        return metrics
+    except Exception as e:
+        logger.log(f"Probe read failed (non-fatal): {e}", "WARNING")
+        return {}
+
+def read_from_jdbc(spark, url, query, user, password, driver, schema_string, source_table, dbtable, logger):
+    """Simple adaptive JDBC reader for Oracle (or view) with size-based pool & fetchsize.
+
+    Logic:
+      1. Pull NUM_ROWS, AVG_ROW_LEN, COL_COUNT from ALL_TABLES (or approximate for VIEW).
+      2. Estimate dataset size = NUM_ROWS * AVG_ROW_LEN (bytes).
+      3. Classify: small / medium / large using thresholds (MB) -> scheduler pools of same name.
+      4. Derive base fetchsize from classification, then cap by target batch bytes and user max.
+
+    Configurable (Spark conf or env):
+      dlh.jdbc.sizeThresholdsMB (env DLH_JDBC_SIZE_THRESHOLDS_MB) => "100,1024" (small<100MB, medium<1024MB else large)
+      dlh.jdbc.targetBatchMB (env DLH_JDBC_TARGET_BATCH_MB) default 8 (MB of data to aim per round trip)
+      dlh.jdbc.maxFetchSize (env DLH_JDBC_MAX_FETCH_SIZE) default 10000
+      dlh.jdbc.poolPrefix (env DLH_JDBC_POOL_PREFIX) optional string prepended to pool name
+
+    NOTE: Adjusting executor memory at runtime (after SparkContext starts) is not possible on Kubernetes.
+          If larger memory is needed for large tables, submit a separate job or create a new SparkSession
+          launched with higher spark.executor.memory.
+
+          High‑level purpose read_from_jdbc dynamically:
+
+Discovers object type (TABLE vs VIEW).
+Collects lightweight metadata (row count, avg row length, column count).
+Estimates dataset size (bytes) = NUM_ROWS * AVG_ROW_LEN.
+Classifies size (small / medium / large) using configurable thresholds.
+Derives a JDBC fetchsize tuned to both size class and an approximate target batch size (MB).
+Assigns a Spark FAIR scheduler pool based on size class.
+Executes the JDBC read with custom schema and computed fetchsize.
+Step‑by‑step
+
+Input parameters: Spark session, JDBC connection info (url, query, credentials, driver), an Oracle object identifier (dbtable, e.g. SCHEMA.TABLE), a precomputed schema_string (customSchema), and a logger.
+
+Object type discovery:
+
+Runs a query on ALL_OBJECTS filtered by OWNER + OBJECT_NAME.
+Fails early if OBJECT_TYPE cannot be determined (prevents silent misreads).
+Metadata retrieval:
+
+If TABLE: queries ALL_TABLES for NUM_ROWS, AVG_ROW_LEN and a correlated subquery for column count.
+If VIEW: counts rows directly (SELECT COUNT(*)) and approximates average row length and column count from ALL_TAB_COLUMNS (sum of DATA_LENGTH, count of columns).
+Fallback: If AVG_ROW_LEN missing or zero, defaults to 500 bytes (heuristic).
+Dataset size estimation:
+
+dataset_bytes = num_rows * avg_row_len.
+This approximate footprint drives both classification and fetchsize.
+Size classification:
+
+Threshold string dlh.jdbc.sizeThresholdsMB (default “100,1024”) read from Spark conf only (env fallback was removed later).
+Parsed into two numbers: small_mb, medium_mb.
+Classification:
+< small_mb MB → small
+< medium_mb MB → medium
+else → large
+Converts MB thresholds to bytes for comparison.
+Target batch sizing:
+
+Reads dlh.jdbc.targetBatchMB (default “8”) → target_batch_mb.
+Converts to bytes; ensures at least 1MB.
+Represents the approximate amount of data (bytes) the code wants per fetch (network round trip).
+Fetchsize derivation:
+
+Base fetchsize map by size class: small=2000, medium=4000, large=8000 rows.
+Calculates cap_by_batch = target_batch_bytes / avg_row_len (how many rows roughly fit into target batch size).
+Ensures cap_by_batch ≥ 50 for minimal efficiency.
+Final fetchsize = min(base_fetch, cap_by_batch, max_fetchsize_override) with a floor of 50.
+max_fetchsize_override from dlh.jdbc.maxFetchSize (default “10000”).
+Effect:
+For narrow rows, base_fetch may dominate (capped by override).
+For very wide rows, cap_by_batch shrinks fetchsize to respect target batch bytes.
+FAIR scheduler pool assignment:
+
+Determines pool name = optional prefix + size_class (e.g. small, medium, large).
+Sets sparkContext local property spark.scheduler.pool to influence scheduling fairness per table size.
+Logging:
+
+Emits summary: object_type, num_rows, avg_row_len, col_count, dataset_bytes, size_class, fetchsize, target_batch_bytes, max_override.
+Aids operational tuning (you can compare actual performance against these heuristics).
+JDBC read execution:
+
+Uses spark.read.format("jdbc") with:
+customSchema (schema_string) to control column types.
+fetchsize (adaptive).
+query (the SELECT assembled earlier outside this function).
+Returns the loaded DataFrame.
+Key configuration knobs (Spark conf only now):
+
+dlh.jdbc.sizeThresholdsMB: “small,medium” MB cutoffs (default “100,1024”).
+dlh.jdbc.targetBatchMB: Desired approximate data volume per fetch (default 8).
+dlh.jdbc.maxFetchSize: Hard cap on rows per fetch (default 10000).
+dlh.jdbc.poolPrefix: Optional prefix for FAIR pools (e.g. “pool-” → pool-small).
+Why combine avg_row_len and row count?
+
+Pure row count can misrepresent cost (10K rows of 50 bytes vs 10K rows of 10KB each).
+Using bytes (rows * average length) better approximates network + memory pressure.
+AVG_ROW_LEN / NUM_ROWS in ALL_TABLES depend on up-to-date Oracle statistics (ANALYZE / DBMS_STATS). If stale, classification may be off.
+Fallback heuristics
+
+avg_row_len defaults to 500 if unavailable, preventing division by zero and giving a mid-range estimation.
+Minimum fetchsize (50) avoids ultra-small round trips that increase latency overhead.
+Limitations / caveats
+
+Oracle NUM_ROWS, AVG_ROW_LEN are approximate until stats are gathered; recent inserts may not be reflected.
+For views, COUNT(*) can be expensive (full scan); for very large views consider:
+Using an alternative cardinality source (e.g., optimizer stats on underlying tables).
+Adding a safety cap or a configurable switch to skip full COUNT for views.
+Does not handle partitioned table nuances (e.g., skew); a large table with selective WHERE might over-estimate size.
+Scheduler pool names must exist in fairscheduler.xml; otherwise pool assignment is inert (Spark will default).
+Cannot truly change executor memory mid-job; docstring notes this.
+Typical tuning adjustments
+
+Increase dlh.jdbc.targetBatchMB if network has high latency but good bandwidth (larger data chunks per fetch).
+Decrease dlh.jdbc.maxFetchSize if source system faces cursor pressure or memory constraints.
+Adjust size thresholds if “medium” workload too often floods the medium pool (e.g., set “50,512” for earlier classification).
+Edge cases
+
+Zero rows: dataset_bytes=0 → small → fetchsize computed from base (min 50) though practical fetch will just finish quickly.
+Extremely wide rows: cap_by_batch will shrink below base_fetch automatically.
+Very large tables: large class fetchsize may still be reduced by target batch byte division for huge avg_row_len.
+Possible enhancements
+
+Add optional safeguard to re-adjust fetchsize after first partition sample (adaptive feedback).
+Integrate parallel read (partitionColumn, lowerBound, upperBound, numPartitions) for very large tables for true throughput scaling.
+Cache metadata for repeated reads in same run (you previously removed caching; could reintroduce with a simple TTL).
+Add logging of actual time per fetch to refine targetBatchMB empirically.
+Example mental walkthrough Assume:
+
+NUM_ROWS=5,000,000; AVG_ROW_LEN=200 bytes → dataset_bytes ≈ 1,000,000,000 (~953MB).
+Thresholds 100MB / 1024MB → 953MB < 1024MB → medium.
+base_fetch = 4000.
+targetBatchMB = 8MB → target_batch_bytes ≈ 8,388,608.
+cap_by_batch = 8,388,608 / 200 ≈ 41,943 → min(base_fetch, cap_by_batch, max_override) = 4000 → fetchsize=4000.
+If AVG_ROW_LEN were 8000 bytes:
+
+cap_by_batch = 8,388,608 / 8000 ≈ 1,048 → fetchsize = min(4000, 1048, 10000) = 1048 (reined in due to wide rows).
+Summary The function is a lightweight heuristic tuner that uses static Oracle metadata to (a) classify workload size, (b) choose a fair scheduler pool, and (c) compute a sensible fetchsize balancing throughput and memory/network efficiency.
+
+Let me know if you want:
+
+Parallelization logic (partitioned JDBC reads)
+A variant for MSSQL
+Reintroduction of metadata cache
+Runtime adaptive refinement (feedback loop)
+
+    """
+    try:
+        owner = dbtable.split('.')[0]
+        table_name_only = dbtable.split('.')[-1]
+
+        # 1. Identify object type (TABLE / VIEW)
+        object_type_q = f"""
 SELECT OBJECT_TYPE FROM ALL_OBJECTS
-WHERE OBJECT_NAME = '{dbtable.split('.')[-1]}' AND OWNER = '{dbtable.split('.')[0]}'
+WHERE OBJECT_NAME = '{table_name_only}' AND OWNER = '{owner}'
 """
-        object_name_df = (
-            spark.read
-            .format("jdbc")
+        object_type_df = (
+            spark.read.format("jdbc")
             .option("url", url)
-            .option("query", object_name_query)
+            .option("query", object_type_q)
             .option("user", user)
             .option("password", password)
             .option("driver", driver)
             .load()
         )
-        OBJECT_TYPE = object_name_df.first()["OBJECT_TYPE"] if not object_name_df.rdd.isEmpty() else None
-        if OBJECT_TYPE is None:
-            raise ValueError(f"Object type for table '{source_table}' in schema '{dbtable.split('.')[0]}' could not be determined. Please check the table or view existence.")
+        OBJECT_TYPE = object_type_df.first()["OBJECT_TYPE"] if not object_type_df.rdd.isEmpty() else None
+        if not OBJECT_TYPE:
+            raise ValueError(f"Could not determine object type for {dbtable}")
 
+        # 2. Pull metadata
+        num_rows = 0
+        avg_row_len = None
+        col_count = 0
         if OBJECT_TYPE == "TABLE":
-            metadata_query = f"SELECT CAST(NUM_ROWS AS NUMBER) AS NUM_ROWS FROM ALL_TABLES WHERE TABLE_NAME = '{dbtable.split('.')[-1]}' and OWNER = '{dbtable.split('.')[0]}'"
-        elif OBJECT_TYPE == "VIEW":
-            metadata_query = f"SELECT count(*) as NUM_ROWS FROM {dbtable}"
+            meta_q = f"""
+SELECT t.NUM_ROWS, t.AVG_ROW_LEN,
+       (SELECT COUNT(*) FROM ALL_TAB_COLUMNS c WHERE c.OWNER = t.OWNER AND c.TABLE_NAME = t.TABLE_NAME) AS COL_COUNT
+FROM ALL_TABLES t
+WHERE t.OWNER = '{owner}' AND t.TABLE_NAME = '{table_name_only}'
+"""
+            meta_df = (
+                spark.read.format("jdbc")
+                .option("url", url)
+                .option("query", meta_q)
+                .option("user", user)
+                .option("password", password)
+                .option("driver", driver)
+                .load()
+            )
+            if not meta_df.rdd.isEmpty():
+                r = meta_df.first()
+                num_rows = int(r["NUM_ROWS"]) if r["NUM_ROWS"] is not None else 0
+                avg_row_len = int(r["AVG_ROW_LEN"]) if r["AVG_ROW_LEN"] is not None else None
+                col_count = int(r["COL_COUNT"]) if r["COL_COUNT"] is not None else 0
+        else:  # VIEW
+            # Approximate row count & avg row length
+            rowcount_q = f"SELECT COUNT(*) AS NUM_ROWS FROM {dbtable}"
+            rc_df = (
+                spark.read.format("jdbc")
+                .option("url", url)
+                .option("query", rowcount_q)
+                .option("user", user)
+                .option("password", password)
+                .option("driver", driver)
+                .load()
+            )
+            num_rows = int(rc_df.first()["NUM_ROWS"]) if not rc_df.rdd.isEmpty() else 0
+            col_len_q = f"""SELECT SUM(DATA_LENGTH) AS AVG_ROW_LEN, COUNT(*) AS COL_COUNT
+FROM ALL_TAB_COLUMNS WHERE OWNER='{owner}' AND TABLE_NAME='{table_name_only}'"""
+            len_df = (
+                spark.read.format("jdbc")
+                .option("url", url)
+                .option("query", col_len_q)
+                .option("user", user)
+                .option("password", password)
+                .option("driver", driver)
+                .load()
+            )
+            if not len_df.rdd.isEmpty():
+                r = len_df.first()
+                avg_row_len = int(r["AVG_ROW_LEN"]) if r["AVG_ROW_LEN"] is not None else None
+                col_count = int(r["COL_COUNT"]) if r["COL_COUNT"] is not None else 0
+
+        if not avg_row_len or avg_row_len <= 0:
+            avg_row_len = 500  # fallback heuristic
+
+        dataset_bytes = num_rows * avg_row_len
+
+        # 3. Thresholds & classification
+        thr_cfg = spark.conf.get("dlh.jdbc.sizeThresholdsMB", "100,1024")
+        try:
+            parts = [int(p.strip()) for p in thr_cfg.split(",") if p.strip()]
+        except Exception:
+            parts = [100, 1024]
+        while len(parts) < 2:
+            parts.append(parts[-1] * 2)
+        small_mb, medium_mb = parts[0], parts[1]
+        small_bytes = small_mb * 1024 * 1024
+        medium_bytes = medium_mb * 1024 * 1024
+
+        if dataset_bytes < small_bytes:
+            size_class = "small"
+        elif dataset_bytes < medium_bytes:
+            size_class = "medium"
         else:
-            metadata_query = f"SELECT 0 as NUM_ROWS"
+            size_class = "large"
 
-        metadata_df = (
-            spark.read
-            .format("jdbc")
-            .option("url", url)
-            .option("query", metadata_query)
-            .option("user", user)
-            .option("password", password)
-            .option("driver", driver)
-            .load()
-        )
-        row_count = metadata_df.first()["NUM_ROWS"] or 0
+        # 4. Fetchsize calculation (size-class based)
+        target_batch_mb_cfg = spark.conf.get("dlh.jdbc.targetBatchMB", "8")
+        try:
+            target_batch_mb = float(target_batch_mb_cfg)
+        except ValueError:
+            target_batch_mb = 8.0
+        target_batch_bytes = max(1.0, target_batch_mb) * 1024 * 1024
 
-        if row_count == 0:
-            fetchsize = 20
-        elif row_count <= 100:
+        max_fetchsize_override = spark.conf.get("dlh.jdbc.maxFetchSize", "10000")
+        try:
+            max_fetchsize_override = int(max_fetchsize_override)
+        except ValueError:
+            max_fetchsize_override = 10000
+
+        base_fetch_map = {"small": 2000, "medium": 4000, "large": 8000}
+        base_fetch = base_fetch_map.get(size_class, 2000)
+
+        cap_by_batch = int(target_batch_bytes / avg_row_len) if avg_row_len > 0 else base_fetch
+        if cap_by_batch < 50:
+            cap_by_batch = 50
+
+        fetchsize = min(base_fetch, cap_by_batch, max_fetchsize_override)
+        if fetchsize < 50:
             fetchsize = 50
-        elif row_count <= 500:
-            fetchsize = 100
-        elif row_count <= 5000:
-            fetchsize = 200
-        elif row_count <= 20000:
-            fetchsize = 500
-        elif row_count <= 50000:
-            fetchsize = 1000
-        elif row_count <= 100000:
-            fetchsize = 5000
-        else:
-            fetchsize = 10000
 
+        # Optional probe-based refinement (DEV only)
+        enable_probe = spark.conf.get("dlh.jdbc.enableProbe", "false").lower() in {"true", "1", "yes", "y"}
+        if enable_probe:
+            probe_limit_cfg = spark.conf.get("dlh.jdbc.probeLimit", "500")
+            try:
+                probe_limit = int(probe_limit_cfg)
+            except ValueError:
+                probe_limit = 500
+            probe_metrics = probe_read(
+                spark=spark,
+                url=url,
+                dbtable=dbtable,
+                user=user,
+                password=password,
+                driver=driver,
+                logger=logger,
+                limit=probe_limit,
+                fetchsize=min(fetchsize, 500),  # keep probe light
+                customSchema=schema_string,
+                target_batch_bytes=target_batch_bytes,
+                max_fetchsize_override=max_fetchsize_override,
+            )
+            rec = probe_metrics.get("recommended_fetchsize")
+            if rec and rec > 0:
+                # Blend: take min of rec & original cap to avoid jump beyond policy
+                blended = min(rec, max_fetchsize_override)
+                if blended < 50:
+                    blended = 50
+                logger.log(f"Fetchsize refinement: initial={fetchsize} -> blended={blended} (probe)", "INFO")
+                fetchsize = blended
+
+        # 5. Scheduler pool assignment (small/medium/large)
+        try:
+            pool_prefix = spark.conf.get("dlh.jdbc.poolPrefix", "")
+            pool_name = f"{pool_prefix}{size_class}" if pool_prefix else size_class
+            if hasattr(spark, "sparkContext"):
+                spark.sparkContext.setLocalProperty("spark.scheduler.pool", pool_name)
+        except Exception as pool_ex:
+            logger.log(f"Pool assignment failed: {pool_ex}", "WARNING")
+
+        logger.log(
+            "JDBC adaptive summary -> "
+            f"object_type={OBJECT_TYPE}, num_rows={num_rows}, avg_row_len={avg_row_len}, col_count={col_count}, "
+            f"dataset_bytes={dataset_bytes}, size_class={size_class}, fetchsize={fetchsize}, target_batch_bytes={int(target_batch_bytes)}, max_override={max_fetchsize_override}",
+            "INFO",
+        )
+
+        # 6. Execute read
         source_df = (
-            spark.read
-            .format("jdbc")
+            spark.read.format("jdbc")
             .option("url", url)
             .option("query", query)
             .option("user", user)
@@ -1020,8 +1339,7 @@ WHERE TABLE_NAME = '{source_table.upper()}' AND OWNER = '{source_schema.upper()}
                         where_parts.append(f"({date_clause})")
                     if source_where_clause and source_where_clause.strip():
                         where_parts.append(source_where_clause)
-                    where_sql = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
-                    query = f"SELECT {select_cols} FROM {dbtable}{where_sql}"
+                    where_sql = f"SELECT {select_cols} FROM {dbtable} WHERE {' AND '.join(where_parts)}" if where_parts else f"SELECT {select_cols} FROM {dbtable}"
 
                 elif cdc_type and cdc_type.upper() == "APPEND_KEY" and cdc_append_key_column:
                     max_df = spark.read.format("jdbc").option("url", url).option(
@@ -1041,8 +1359,7 @@ WHERE TABLE_NAME = '{source_table.upper()}' AND OWNER = '{source_schema.upper()}
                         where_parts.append(f"{cdc_append_key_column} > {updated_at} AND {cdc_append_key_column} <= {max_value}")
                     if source_where_clause and source_where_clause.strip():
                         where_parts.append(source_where_clause)
-                    where_sql = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
-                    query = f"SELECT {select_cols} FROM {dbtable}{where_sql}"
+                    where_sql = f"SELECT {select_cols} FROM {dbtable} WHERE {' AND '.join(where_parts)}" if where_parts else f"SELECT {select_cols} FROM {dbtable}"
                 else:
                     if source_fields and source_fields.strip():
                         select_cols = source_fields
