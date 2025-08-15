@@ -1,7 +1,6 @@
 import unittest
 from unittest.mock import MagicMock, patch
-from dlh_run_db_ingestion import process_table
-from python_dlh_ingestion_run_db_job import JobTracker
+from dlh_ingestion import process_table, JobTracker
 
 
 class TestOracleIncremental(unittest.TestCase):
@@ -23,19 +22,26 @@ class TestOracleIncremental(unittest.TestCase):
             logger=self.logger
         )
 
-    @patch("dlh_run_db_ingestion.connect_to_oracle")
-    @patch("dlh_run_db_ingestion.fetch_data_from_oracle")
-    @patch("dlh_run_db_ingestion.create_table")
+    @patch("dlh_ingestion.connect_to_oracle")
+    @patch("dlh_ingestion.fetch_data_from_oracle")
+    @patch("dlh_ingestion.create_table")
     @patch.object(JobTracker, "insert_initial_status")
-    def test_oracle_incremental_timestamp_with_prev_updated_at(self, ins_init, create_table_fn, fetch_oracle, conn_oracle):
-        ins_init.return_value = MagicMock()
+    @patch("dlh_ingestion.jdbc_adaptive.read_from_jdbc")
+    def test_oracle_incremental_timestamp_with_prev_updated_at(self, read_jdbc, ins_init, create_table_fn, fetch_oracle, conn_oracle):
+        mock_status = MagicMock()
+        select_mock = MagicMock()
+        first_mock = MagicMock()
+        first_mock.__getitem__.return_value = "2025-08-15 13:00:00"
+        select_mock.first.return_value = first_mock
+        mock_status.select.return_value = select_mock
+        ins_init.return_value = mock_status
         df_meta = MagicMock()
         conn_oracle.return_value = df_meta
         df_data = MagicMock()
         df_data.columns = ["A"]
         fetch_oracle.return_value = df_data
         create_table_fn.return_value = "20250101"
-
+        read_jdbc.return_value = df_data
         rdd_mock = MagicMock()
         rdd_mock.isEmpty.return_value = False
         sel_df = MagicMock()
@@ -45,7 +51,6 @@ class TestOracleIncremental(unittest.TestCase):
         upd_df.rdd = rdd_mock
         upd_df.select.return_value = sel_df
         self.spark.sql.return_value = upd_df
-
         row = {
             "job_id": "J1",
             "source_schema": "S",
@@ -64,7 +69,7 @@ class TestOracleIncremental(unittest.TestCase):
             "target_partition_by": None,
             "target_truncate": "N",
         }
-        with patch("dlh_run_db_ingestion.handle_job_completion_or_failure") as mock_handle:
+        with patch("dlh_ingestion.handle_job_completion_or_failure") as mock_handle:
             mock_handle.return_value = MagicMock()
             out = process_table(
                 row=row,
@@ -89,30 +94,30 @@ class TestOracleIncremental(unittest.TestCase):
             )
         self.assertTrue(out)
 
-    @patch("dlh_run_db_ingestion.connect_to_oracle")
-    @patch("dlh_run_db_ingestion.fetch_data_from_oracle")
-    @patch("dlh_run_db_ingestion.create_table")
+    @patch("dlh_ingestion.connect_to_oracle")
+    @patch("dlh_ingestion.fetch_data_from_oracle")
+    @patch("dlh_ingestion.create_table")
     @patch.object(JobTracker, "insert_initial_status")
-    def test_oracle_incremental_append_key(self, ins_init, create_table_fn, fetch_oracle, conn_oracle):
-        ins_init.return_value = MagicMock()
+    @patch("dlh_ingestion.jdbc_adaptive.read_from_jdbc")
+    def test_oracle_incremental_append_key(self, read_jdbc, ins_init, create_table_fn, fetch_oracle, conn_oracle):
+        # configure start_time chain to return a concrete timestamp string
+        mock_status = MagicMock()
+        select_mock = MagicMock()
+        first_mock = MagicMock()
+        first_mock.__getitem__.return_value = "2025-08-15 14:00:00"
+        select_mock.first.return_value = first_mock
+        mock_status.select.return_value = select_mock
+        ins_init.return_value = mock_status
         df_meta = MagicMock()
         conn_oracle.return_value = df_meta
         df_data = MagicMock()
         df_data.columns = ["A"]
         fetch_oracle.return_value = df_data
         create_table_fn.return_value = "20250102"
-
-        max_df = MagicMock()
-        rdd_mock = MagicMock()
-        rdd_mock.isEmpty.return_value = False
-        max_df.rdd = rdd_mock
-        max_df.first.return_value = {"MAX_VALUE": 123}
-        self.spark.read.format.return_value.option.return_value.option.return_value.option.return_value.option.return_value.load.return_value = max_df
-
+        read_jdbc.return_value = df_data  # bypass internal object type logic
         upd_df = MagicMock()
         upd_df.rdd.isEmpty.return_value = True
         self.spark.sql.return_value = upd_df
-
         row = {
             "job_id": "J2",
             "source_schema": "S",
@@ -128,7 +133,7 @@ class TestOracleIncremental(unittest.TestCase):
             "target_partition_by": None,
             "target_truncate": "N",
         }
-        with patch("dlh_run_db_ingestion.handle_job_completion_or_failure") as mock_handle:
+        with patch("dlh_ingestion.handle_job_completion_or_failure") as mock_handle:
             mock_handle.return_value = MagicMock()
             out = process_table(
                 row=row,

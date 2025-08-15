@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import MagicMock, patch
-from dlh_run_db_ingestion import write_with_retry, CustomLogger
+from dlh_ingestion import write_with_retry, CustomLogger
 
 
 class TestWriteRetryFailure(unittest.TestCase):
@@ -8,7 +8,7 @@ class TestWriteRetryFailure(unittest.TestCase):
         self.spark = MagicMock()
         self.logger = CustomLogger(self.spark, "s3a://bucket/", "prefix/", "test-app")
 
-    @patch("dlh_run_db_ingestion.col")
+    @patch("dlh_ingestion.orchestration.col")
     def test_write_with_retry_exhausts(self, mock_col):
         m = MagicMock()
         m.cast.return_value = m

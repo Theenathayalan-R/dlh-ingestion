@@ -1,13 +1,11 @@
 import unittest
 from unittest.mock import MagicMock, patch
-
-from python_dlh_ingestion_run_db_job import CustomLogger, SparkSession
+from dlh_ingestion import CustomLogger  # switched import
 
 
 class TestCustomLoggerExtended(unittest.TestCase):
-    @patch('python_dlh_ingestion_run_db_job.SparkSession')
-    def setUp(self, MockSparkSession):
-        self.spark = MockSparkSession.builder.getOrCreate()
+    def setUp(self):
+        self.spark = MagicMock()
         self.logger = CustomLogger(self.spark, "s3a://bucket/", "prefix/", "test-app")
 
     def test_log_levels_and_content(self):
@@ -31,7 +29,6 @@ class TestCustomLoggerExtended(unittest.TestCase):
         writer.mode.return_value = writer
         writer.option.return_value = writer
         writer.save.return_value = None
-
         ok = self.logger.save_to_s3("/logref/")
         self.assertTrue(ok)
         writer.save.assert_called_once()

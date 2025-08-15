@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import MagicMock
-from dlh_run_db_ingestion import sanitize_column_name, CustomLogger
+from dlh_ingestion import sanitize_column_name, CustomLogger  # switched to modular package
 
 
 class TestUtils(unittest.TestCase):

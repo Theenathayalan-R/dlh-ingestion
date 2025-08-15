@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import MagicMock, patch
-from dlh_run_db_ingestion import full_load_mssql, incremental_load_mssql, CustomLogger
+from dlh_ingestion import full_load_mssql, incremental_load_mssql, CustomLogger  # switched to modular package
 
 
 class TestMSSQLLoads(unittest.TestCase):
@@ -8,7 +8,7 @@ class TestMSSQLLoads(unittest.TestCase):
         self.spark = MagicMock()
         self.logger = CustomLogger(self.spark, "s3a://bucket/", "prefix/", "test-app")
 
-    @patch("dlh_run_db_ingestion.create_table")
+    @patch("dlh_ingestion.loaders.create_table")
     def test_full_load_mssql_success(self, create_table_fn):
         create_table_fn.return_value = "20250101"
         df = MagicMock()
@@ -34,7 +34,7 @@ class TestMSSQLLoads(unittest.TestCase):
         self.assertEqual(out, "20250101")
         self.assertFalse(self.spark.sql.called)
 
-    @patch("dlh_run_db_ingestion.create_table")
+    @patch("dlh_ingestion.loaders.create_table")
     def test_full_load_mssql_with_partition_overwrite(self, create_table_fn):
         create_table_fn.return_value = "20250101"
         df = MagicMock()
@@ -60,7 +60,7 @@ class TestMSSQLLoads(unittest.TestCase):
         self.assertEqual(out, "20250101")
         self.spark.sql.assert_called_once()
 
-    @patch("dlh_run_db_ingestion.create_table")
+    @patch("dlh_ingestion.loaders.create_table")
     def test_incremental_load_mssql_success(self, create_table_fn):
         create_table_fn.return_value = "20250102"
         df = MagicMock()
@@ -90,7 +90,7 @@ class TestMSSQLLoads(unittest.TestCase):
         )
         self.assertEqual(out, "20250102")
 
-    @patch("dlh_run_db_ingestion.create_table", side_effect=Exception("boom"))
+    @patch("dlh_ingestion.loaders.create_table", side_effect=Exception("boom"))
     def test_full_load_mssql_error_path(self, create_table_fn):
         df = MagicMock()
         with self.assertRaises(Exception):
@@ -114,7 +114,7 @@ class TestMSSQLLoads(unittest.TestCase):
                 query="SELECT 1",
             )
 
-    @patch("dlh_run_db_ingestion.create_table", side_effect=Exception("boom"))
+    @patch("dlh_ingestion.loaders.create_table", side_effect=Exception("boom"))
     def test_incremental_load_mssql_error_path(self, create_table_fn):
         df = MagicMock()
         with self.assertRaises(Exception):

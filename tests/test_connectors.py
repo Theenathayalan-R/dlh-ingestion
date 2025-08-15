@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import MagicMock
-from dlh_run_db_ingestion import connect_to_mssql_columns
+from dlh_ingestion import connect_to_mssql_columns
 
 
 class TestConnectors(unittest.TestCase):

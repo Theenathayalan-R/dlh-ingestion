@@ -1,21 +1,19 @@
 import unittest
 from unittest.mock import MagicMock, patch
-
-from pyspark.sql import SparkSession  # will be patched in tests
-from python_dlh_ingestion_run_db_job import CustomLogger, JobTracker
+from dlh_ingestion import CustomLogger, JobTracker  # switched imports
 
 
 class TestCustomLogger(unittest.TestCase):
-    @patch('python_dlh_ingestion_run_db_job.SparkSession')
-    def setUp(self, MockSparkSession):
-        self.spark = MockSparkSession.builder.getOrCreate()
+    @patch('dlh_ingestion.logging_utils.CustomLogger.save_to_s3')
+    def setUp(self, mock_save):
+        self.spark = MagicMock()
         self.logger = CustomLogger(self.spark, "s3a://test-bucket", "test-prefix", "test-app")
 
     def test_log(self):
         self.logger.log("Test message", "INFO")
         self.assertIn("Test message", self.logger.get_log_content())
 
-    @patch('python_dlh_ingestion_run_db_job.CustomLogger.save_to_s3')
+    @patch('dlh_ingestion.logging_utils.CustomLogger.save_to_s3')
     def test_save_to_s3(self, mock_save_to_s3):
         mock_save_to_s3.return_value = True
         result = self.logger.save_to_s3("test-log-reference")
@@ -23,9 +21,8 @@ class TestCustomLogger(unittest.TestCase):
 
 
 class TestJobTracker(unittest.TestCase):
-    @patch('python_dlh_ingestion_run_db_job.SparkSession')
-    def setUp(self, MockSparkSession):
-        self.spark = MockSparkSession.builder.getOrCreate()
+    def setUp(self):
+        self.spark = MagicMock()
         self.logger = CustomLogger(self.spark, "s3a://test-bucket", "test-prefix", "test-app")
         self.lock = MagicMock()
         self.job_tracker = JobTracker(

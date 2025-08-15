@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import MagicMock, patch
-from dlh_run_db_ingestion import (
+from dlh_ingestion import (
     read_config_from_iceberg,
     connect_to_mssql_columns,
     read_from_jdbc,
@@ -13,6 +13,7 @@ from dlh_run_db_ingestion import (
 class TestHelpersMore(unittest.TestCase):
     def setUp(self):
         self.spark = MagicMock()
+        self.spark.conf.get.return_value = "100,1024"
         self.logger = CustomLogger(self.spark, "s3a://bucket/", "prefix/", "test-app")
 
     def test_read_config_from_iceberg_success(self):
@@ -66,15 +67,13 @@ class TestHelpersMore(unittest.TestCase):
         self.assertIs(out, final_df)
 
     def test_read_from_jdbc_mssql(self):
-        obj_df = MagicMock()
-        obj_df.rdd.isEmpty.return_value = False
-        obj_df.first.return_value = {"OBJECT_TYPE": "VIEW"}
-        meta_df = MagicMock()
-        meta_df.first.return_value = {"NUM_ROWS": 0}
+        obj_df = MagicMock(); obj_df.rdd.isEmpty.return_value = False; obj_df.first.return_value = {"OBJECT_TYPE": "VIEW"}
+        rc_df = MagicMock(); rc_df.first.return_value = {"NUM_ROWS": 0}; rc_df.rdd.isEmpty.return_value = False
+        len_df = MagicMock(); len_df.first.return_value = {"AVG_ROW_LEN": 120, "COL_COUNT": 2}; len_df.rdd.isEmpty.return_value = False
         final_df = MagicMock()
         chain = self.spark.read.format.return_value
         chain.option.return_value = chain
-        chain.load.side_effect = [obj_df, meta_df, final_df]
+        chain.load.side_effect = [obj_df, rc_df, len_df, final_df]
         out = read_from_jdbc(
             self.spark, "url", "SELECT * FROM dbo.T", "u", "p", "d",
             "C1 STRING", "T", "dbo.T", self.logger
@@ -101,8 +100,15 @@ class TestHelpersMore(unittest.TestCase):
         rid2 = get_run_id(self.spark, "cat", "sch", "tbl", "B1", self.logger)
         self.assertIsNone(rid2)
 
-    @patch("dlh_run_db_ingestion.F")
-    def test_classify_error_paths(self, mock_F):
+    @patch("dlh_ingestion.errors.pyspark")
+    @patch("pyspark.sql.functions.col", autospec=True)
+    def test_classify_error_paths(self, mock_col, mock_pyspark):
+        mock_pyspark.return_value = True
+        # make col() return object with rlike
+        class ColObj:
+            def rlike(self, other):
+                return MagicMock()
+        mock_col.return_value = ColObj()
         spark_mock = MagicMock()
 
         patterns_df = MagicMock()
@@ -119,10 +125,6 @@ class TestHelpersMore(unittest.TestCase):
         df4.select.return_value = df5
 
         spark_mock.createDataFrame.side_effect = [patterns_df, error_df]
-
-        mcol = MagicMock()
-        mcol.rlike.return_value = MagicMock()
-        mock_F.col.return_value = mcol
 
         out = classify_error(spark_mock, "ORA-01017: invalid username/password", self.logger)
         self.assertEqual(out, {"error_type": "CRITICAL", "description": "Invalid Credentials"})
@@ -141,7 +143,6 @@ class TestHelpersMore(unittest.TestCase):
         df21.filter.return_value = df22
         df22.select.return_value = df23
         spark_mock2.createDataFrame.side_effect = [patterns_df2, error_df2]
-        mock_F.col.return_value = mcol
 
         out2 = classify_error(spark_mock2, "random error", self.logger)
         self.assertEqual(out2, {"error_type": "NON_CRITICAL", "description": "Error occurred"})
